@@ -1,0 +1,21 @@
+[package]
+name = "subtitle-adjust"
+version = "0.1.0"
+authors = ["Dan Zwell <devel@zwell.net>"]
+license = "gpl-2.0"
+description = "A tool to adjust subtitle timings or positions"
+readme = "README.md"
+repository = "https://github.com/lefth/subtitle-adjust"
+keywords = ["srt", "subtitle", "subrip"]
+categories = ["multimedia", "command-line-utilities"]
+edition = "2018"
+
+[dependencies]
+log = { version = "0.4", features = ["max_level_trace"] }
+env_logger = "0"
+lazy_static = "1"
+structopt = "0.3"
+regex = "1"
+die = "0"
+encoding_rs_io = "0.1"
+encoding_rs = "0"
