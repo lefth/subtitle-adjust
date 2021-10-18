@@ -1,17 +1,12 @@
 use std::{
-    error::Error,
     fmt::{Display, Write},
-    io::ErrorKind,
     path::{Path, PathBuf},
 };
 
-use die::die;
-
+use anyhow::{anyhow, bail, Result};
 use lazy_static::lazy_static;
 use regex::Regex;
 use structopt::*;
-
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 const PAL: f64 = 25.0;
 const NTSC: f64 = 23.976;
@@ -111,20 +106,20 @@ struct ScaleOpts {
 }
 
 impl Opt {
-    pub fn validate(&mut self) -> OptFinal {
+    pub fn validate(&mut self) -> Result<OptFinal> {
         if !Path::exists(self.path.as_path()) {
-            die!("Input path does not exist: {:#?}", self.path);
+            bail!("Input path does not exist: {:#?}", self.path);
         } else if std::fs::read_link(self.path.as_path()).is_ok() {
             // Note: we're not checking for special file types. That's rare and requires
             // platform specific code.
-            die!("Will not modify a symlink.");
+            bail!("Will not modify a symlink.");
         }
 
         if self.offset_opts.from.is_some() != self.offset_opts.to.is_some() {
-            die!("The `--from` and `--to` arguments must be used together.")
+            bail!("The `--from` and `--to` arguments must be used together.")
         }
         if self.offset_opts.from.is_some() && self.offset_opts.offset.is_some() {
-            die!("The `--from`/`--to` arguments can't be uset with `--offset`.")
+            bail!("The `--from`/`--to` arguments can't be uset with `--offset`.")
         }
         if self.scale_opts.subs_are_fast as i32
             + self.scale_opts.subs_are_slow as i32
@@ -132,7 +127,7 @@ impl Opt {
             + self.extract as i32
             > 1
         {
-            die!(
+            bail!(
                 "Only one of the --extract, --scale, --subs-are-fast, and --subs-are-slow options are allowed."
             )
         }
@@ -146,17 +141,17 @@ impl Opt {
 
         if self.offset_opts.offset_start.is_some() && self.scale_opts.scale.is_some() {
             // If this turns out to be useful, I'll add the feature.
-            die!("Cannot both scale and set an offset start, because the meaning is unclear.");
+            bail!("Cannot both scale and set an offset start, because the meaning is unclear.");
         }
 
         if self.offset_opts.offset.is_some() && self.scale_opts.scale.is_some() {
             // If this turns out to be useful, I'll add the feature.
-            die!("Cannot both scale and offset together, because mistakes are too likely. \
+            bail!("Cannot both scale and offset together, because mistakes are too likely. \
                 Instead, first sync the subtitles at a point in time then use --scale and --scale-pivot together.");
         }
 
         if self.scale_opts.scale_pivot.is_some() && self.scale_opts.scale.is_none() {
-            die!("Cannot use a scale pivot without some type of time scaling.");
+            bail!("Cannot use a scale pivot without some type of time scaling.");
         }
 
         // Convert --to/--from to --offset:
@@ -171,7 +166,7 @@ impl Opt {
             && self.to_top.is_empty()
             && !self.extract
         {
-            die!(
+            bail!(
                 "`--extract` or one of the offset options, the scale options, or the `--to-top`, `--to-bottom` \
                 options much be used.\nSee `--help` for details."
             );
@@ -185,7 +180,7 @@ impl Opt {
                     || to_bottom_interval.contains(to_top_interval.start_ms)
                     || to_bottom_interval.contains(to_top_interval.end_ms)
                 {
-                    die!("The times to move subtitles to the top and to the bottom overlap; can't do both at the same time.");
+                    bail!("The times to move subtitles to the top and to the bottom overlap; can't do both at the same time.");
                 }
             }
         }
@@ -199,10 +194,10 @@ impl Opt {
                 || !self.to_bottom.is_empty()
                 || !self.to_top.is_empty())
         {
-            die!("Cannot combine `--extract` with other options or operations.");
+            bail!("Cannot combine `--extract` with other options or operations.");
         }
 
-        OptFinal {
+        Ok(OptFinal {
             path: self.path.clone(),
 
             scale: self.scale_opts.scale,
@@ -213,7 +208,7 @@ impl Opt {
             to_top: self.to_top.clone(),
             to_bottom: self.to_bottom.clone(),
             extract: self.extract,
-        }
+        })
     }
 }
 
@@ -383,18 +378,12 @@ pub fn parse_ms(input: &str) -> Result<i64> {
 
         // this blocks "1:90" but allows "90"
         if minutes > 60 || (seconds > 60 && (minutes > 0 || hours > 0)) {
-            return Err(Box::new(std::io::Error::new(
-                ErrorKind::InvalidData,
-                "Invalid minutes or seconds value",
-            )));
+            bail!("Invalid minutes or seconds value");
         }
 
         Ok(sign * (ms + 1000 * (seconds + 60 * (minutes + 60 * hours))) as i64)
     } else {
-        Err(Box::new(std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!("Cannot coerce value into timestamp: {}", input),
-        )))
+        bail!("Cannot coerce value into timestamp: {}", input)
     }
 }
 
@@ -405,15 +394,9 @@ pub(crate) fn parse_timespan(input: &str) -> Result<TimeSpan> {
             Regex::new(format!(r"^({})?-({})?$", NUMBER_REGEX, NUMBER_REGEX).as_str()).unwrap();
     }
 
-    let captures = match RE.captures(input) {
-        Some(captures) => captures,
-        None => {
-            return Err(Box::new(std::io::Error::new(
-                ErrorKind::InvalidData,
-                format!("Malformed timespan: {}", input),
-            )))
-        }
-    };
+    let captures = RE
+        .captures(input)
+        .ok_or_else(|| anyhow!("Malformed timespan: {:#?}", input))?;
 
     let start_time = captures
         .get(1)
@@ -423,10 +406,7 @@ pub(crate) fn parse_timespan(input: &str) -> Result<TimeSpan> {
         .map_or(Ok(i64::MAX), |m| parse_ms(m.as_str()))?;
 
     if start_time >= end_time {
-        return Err(Box::new(std::io::Error::new(
-            ErrorKind::InvalidData,
-            format!("Timespan end must come after the start: {}", input),
-        )));
+        bail!("Timespan end must come after the start: {}", input);
     }
     Ok(TimeSpan::new(start_time, end_time))
 }

@@ -21,6 +21,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.44"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "61604a8f862e1d5c3229fdd78f8b02c68dcf73a4c4b05fd636d12240aaa242c1"
+
+[[package]]
 name = "atty"
 version = "0.2.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -57,12 +63,6 @@ dependencies = [
  "unicode-width",
  "vec_map",
 ]
-
-[[package]]
-name = "die"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8634d5e6139f7364a4e99bd718b2f511f2f25863146360e70909bc45a016290"
 
 [[package]]
 name = "encoding_rs"
@@ -239,7 +239,7 @@ dependencies = [
 name = "subtitle-adjust"
 version = "0.1.0"
 dependencies = [
- "die",
+ "anyhow",
  "encoding_rs",
  "encoding_rs_io",
  "env_logger",

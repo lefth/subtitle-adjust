@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::fs::rename;
 use std::fs::File;
 use std::io::BufRead;
@@ -9,7 +8,7 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
-use die::die;
+use anyhow::{anyhow, bail, Context, Result};
 use encoding_rs_io::DecodeReaderBytes;
 use lazy_static::lazy_static;
 use log::LevelFilter;
@@ -21,28 +20,24 @@ use structopt::StructOpt;
 mod lib;
 use crate::lib::*;
 
-type Result<T> = std::result::Result<T, Box<dyn Error>>;
-
-fn main() {
-    let opt = init();
+fn main() -> Result<()> {
+    let opt = init()?;
 
     if opt.extract {
-        extract_subtitles(&opt.path);
+        extract_subtitles(&opt.path)
     } else {
-        let mut subs = match get_subtitles(&opt.path) {
-            Ok(subtitles) => subtitles,
-            Err(err) => panic!("Error processing subtitles: {:?}", err),
-        };
-        modify(&mut subs, &opt).unwrap();
-        backup(&opt.path);
+        let mut subs = get_subtitles(&opt.path).context("Error processing subtitles")?;
+        modify(&mut subs, &opt)?;
+        backup(&opt.path)?;
         if let Err(err) = write_to_disk(subs, &opt.path) {
-            restore(&opt.path);
-            panic!("Error: {:?}", err);
+            restore(&opt.path)?;
+            bail!(err);
         }
+        Ok(())
     }
 }
 
-fn init() -> OptFinal {
+fn init() -> Result<OptFinal> {
     let mut log_builder = env_logger::Builder::new();
     if cfg!(debug_assertions) {
         log_builder.filter_level(LevelFilter::Trace);
@@ -60,7 +55,7 @@ fn init() -> OptFinal {
 
 /// Extract subtitles to .srt from a video file or other format subtitle.
 /// Needs ffmpeg.
-fn extract_subtitles(path: &std::path::PathBuf) {
+fn extract_subtitles(path: &std::path::PathBuf) -> Result<()> {
     let output = path.with_extension("srt");
     // NOTE: If run in WSL, this can invoke ffmpeg.exe if ffmpeg isn't found,
     // but paths may not be valid for Windows executables. It works for paths
@@ -76,22 +71,22 @@ fn extract_subtitles(path: &std::path::PathBuf) {
             .spawn();
         match handle {
             Ok(mut handle) => {
-                handle.wait().unwrap();
-                return;
+                handle.wait()?;
+                return Ok(());
             }
             Err(err) if err.kind() == ErrorKind::NotFound => {
                 info!("Will try to continue after error: {}", err);
                 continue;
             }
-            Err(err) => die!("Error: {:?}", err.kind()),
+            Err(err) => bail!(err),
         };
     }
-    die!("Cannot extract subtitles: could not find `ffmpeg` or `ffmpeg.exe`.");
+    bail!("Cannot extract subtitles: could not find `ffmpeg` or `ffmpeg.exe`.");
 }
 
 fn get_subtitles(path: &std::path::PathBuf) -> Result<SubData> {
     info!("Opening input file: {:#?}", &path);
-    let file = File::open(&path).unwrap();
+    let file = File::open(&path)?;
     // This library will detect the encoding and remove the BOM if present:
     let decoder = DecodeReaderBytes::new(file);
     let mut reader = BufReader::new(decoder);
@@ -117,7 +112,7 @@ fn get_subtitles(path: &std::path::PathBuf) -> Result<SubData> {
             }
             return Ok(SubData {
                 subs,
-                line_ending: line_ending.unwrap(),
+                line_ending: line_ending.unwrap_or("\n".to_string()),
             });
         }
         line_ending.get_or_insert_with(|| {
@@ -144,7 +139,7 @@ fn get_subtitles(path: &std::path::PathBuf) -> Result<SubData> {
             part_number = Some(
                 buf.trim()
                     .parse::<i64>()
-                    .expect(format!("Was expecting integer, found '{}'", buf).as_str()),
+                    .with_context(|| format!("Was expecting integer, found {:#?}", buf))?,
             );
         } else if part_times.is_none() {
             // looking for 00:00:08,614 --> 00:00:10,373
@@ -156,25 +151,24 @@ fn get_subtitles(path: &std::path::PathBuf) -> Result<SubData> {
                     Regex::new(r"(.*) --> (.*)(\s+X1:(-?\d+) X2:(-?\d+) Y1:(-?\d+) Y2:(-?\d+))?")
                         .unwrap();
             }
-            let captures = match RE.captures(&buf) {
-                Some(captures) => captures,
-                None => {
-                    return Err(Box::new(std::io::Error::new(
-                        ErrorKind::InvalidData,
-                        format!("Expecting time --> time; got: {}", buf),
-                    )));
-                }
-            };
-            let start_ms = parse_ms(captures.get(1).ok_or("Missing start time")?.as_str());
-            let end_ms = parse_ms(captures.get(2).ok_or("Missing end time")?.as_str());
+            let captures = RE
+                .captures(&buf)
+                .with_context(|| format!("Expecting time --> time; got: {:#?}", buf))?;
+            let start_ms = parse_ms(
+                captures
+                    .get(1)
+                    .ok_or(anyhow!("Missing start time"))?
+                    .as_str(),
+            );
+            let end_ms = parse_ms(captures.get(2).ok_or(anyhow!("Missing end time"))?.as_str());
             part_times = Some(TimeSpan::new(start_ms?, end_ms?));
 
             part_position = if captures.get(3).is_some() {
                 Some(Position {
-                    x1: captures.get(4).unwrap().as_str().parse().unwrap(),
-                    x2: captures.get(5).unwrap().as_str().parse().unwrap(),
-                    y1: captures.get(6).unwrap().as_str().parse().unwrap(),
-                    y2: captures.get(7).unwrap().as_str().parse().unwrap(),
+                    x1: captures.get(4).unwrap().as_str().parse()?,
+                    x2: captures.get(5).unwrap().as_str().parse()?,
+                    y1: captures.get(6).unwrap().as_str().parse()?,
+                    y2: captures.get(7).unwrap().as_str().parse()?,
                 })
             } else {
                 None
@@ -185,18 +179,20 @@ fn get_subtitles(path: &std::path::PathBuf) -> Result<SubData> {
     }
 }
 
-fn backup(path: &Path) {
+fn backup(path: &Path) -> Result<()> {
     let mut dest_path = path.as_os_str().to_owned();
     dest_path.push(".bak");
     info!("Backing up file to {:#?}", dest_path);
-    rename(path, &dest_path).unwrap();
+    rename(path, &dest_path)?;
+    Ok(())
 }
 
-fn restore(path: &Path) -> () {
+fn restore(path: &Path) -> Result<()> {
     info!("Restoring .bak file");
     let mut backup_path = path.as_os_str().to_owned();
     backup_path.push(".bak");
-    rename(backup_path, path).unwrap();
+    rename(backup_path, path)?;
+    Ok(())
 }
 
 fn modify(data: &mut SubData, opt: &OptFinal) -> Result<()> {
@@ -215,7 +211,7 @@ fn modify(data: &mut SubData, opt: &OptFinal) -> Result<()> {
             .any(|interval| interval.contains(sub.time_span.start_ms))
         {
             if sub.position.is_some() {
-                die!("Cannot override subtitle position information at {} because it has hard coded position.", sub.time_span.start_ms);
+                bail!("Cannot override subtitle position information at {} because it has hard coded position.", sub.time_span.start_ms);
             }
 
             // Add a position tag at the beginning, replacing any existing position tag:
