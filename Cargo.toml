@@ -1,6 +1,6 @@
 [package]
 name = "subtitle-adjust"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Dan Zwell <devel@zwell.net>"]
 license = "gpl-2.0"
 description = "A tool to adjust subtitle timings or positions"
