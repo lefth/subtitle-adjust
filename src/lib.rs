@@ -342,6 +342,9 @@ pub(crate) static NUMBER_REGEX: &str = r"(?x) # allow whitespace/comments
 /// Parse the digits after "." to a decimal, so for example "050" ("0.05") is 50 ms.
 pub(crate) fn parse_decimal_part(n: &str) -> Result<u64> {
     let trimmed = n.trim_matches('0');
+    if trimmed.is_empty() {
+        return Ok(0);
+    }
     let mut result = trimmed.parse::<u64>()? * 1000 / 10_u64.pow(trimmed.len() as u32);
 
     // Count the leading 0s:
@@ -431,6 +434,7 @@ mod tests {
         assert_eq!(parse_decimal_part("50").unwrap(), 500);
         assert_eq!(parse_decimal_part("500").unwrap(), 500);
         assert_eq!(parse_decimal_part("5000").unwrap(), 500);
+        assert_eq!(parse_decimal_part("000").unwrap(), 0);
     }
 
     #[test]

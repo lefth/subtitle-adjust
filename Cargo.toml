@@ -18,4 +18,4 @@ structopt = "0.3"
 regex = "1"
 encoding_rs_io = "0.1"
 encoding_rs = "0"
-anyhow = "1.0"
+anyhow = { version = "1.0", features = ["backtrace"] }
